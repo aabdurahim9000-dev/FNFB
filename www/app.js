@@ -5,6 +5,7 @@
   const $ = s => document.querySelector(s);
   const $$ = s => [...document.querySelectorAll(s)];
   const has = L.has, after = L.after, plural = L.plural, pad = L.pad;
+  const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
   const NATIVE = !!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform());
   const plug = n => { try { return (Capacitor.Plugins && Capacitor.Plugins[n]) || Capacitor.registerPlugin(n); } catch (e) { return null; } };
@@ -375,7 +376,11 @@
     return [false, ""];
   }
 
-  let mode = null, pending = null, teachPhrase = "", game = {};
+  let mode = null, pending = null, teachPhrase = "", game = {}, argPrefix = "";
+  const BARE = { "открой": "Что открыть?", "запусти": "Что запустить?", "включи": "Что включить?", "найди": "Что найти?",
+    "поищи": "Что поискать?", "позвони": "Кому позвонить?", "набери": "Кому позвонить?", "звони": "Кому позвонить?",
+    "напиши смс": "Кому и что написать?", "отправь смс": "Кому и что написать?", "напиши сообщение": "Кому и что написать?",
+    "напомни": "О чём и через сколько напомнить?", "поставь таймер": "На сколько поставить таймер?", "поставь будильник": "На какое время?" };
   function route(t, voice) {
     t = t.toLowerCase().trim();
     if (!t) return;
@@ -394,6 +399,11 @@
   function dialog(t) {
     const words = new Set(t.split(/\s+/));
     if (["riddle", "guess", "rps"].includes(mode)) return funDialog(t);
+    if (mode === "arg") {
+      const pre = argPrefix; mode = null; argPrefix = "";
+      if (has(t, "отмена", "отмени", "не надо", "ничего")) { say("Хорошо"); return; }
+      execute(pre + " " + t); return;
+    }
     if (mode === "confirm") {
       const a = pending; pending = null; mode = null;
       if (["да", "подтверждаю", "давай", "ага"].some(w => words.has(w))) a(); else say("Отменено");
@@ -412,8 +422,9 @@
   // ---------- выполнение ----------
   let depth = 0;
   function execute(cmd, opts) {
-    cmd = cmd.trim().toLowerCase();
+    cmd = cmd.trim().toLowerCase().replace(/[.,!?]+$/g, "");
     if (!cmd) return false;
+    if (own(BARE, cmd)) { argPrefix = cmd; mode = "arg"; say(BARE[cmd]); return true; }
     depth++;
     try {
       if (depth > 5) return false;
@@ -827,11 +838,22 @@
   }
   async function launchByName(target) {
     const apps = appsCache || (appsCache = ((await BG.apps()) || {}).list || []);
-    const t = norm(target), q = APP_ALIAS[t] || t;
-    if (!q) return false;
+    const t = norm(target);
+    let q = APP_ALIAS[t] || t;
+    if (!t) return false;
+    if (!own(APP_ALIAS, t)) {
+      let bestK = null, bestR = 0.74;
+      for (const k in APP_ALIAS) { const r = L.ratio(t, k); if (r >= bestR) { bestR = r; bestK = k; } }
+      if (bestK) q = APP_ALIAS[bestK];
+    }
     let best = apps.filter(a => norm(a.n) === q);
     if (!best.length) best = apps.filter(a => norm(a.n).includes(q) || String(a.p).toLowerCase().includes(q));
     if (!best.length) best = apps.filter(a => stemMatch(a.n, t));
+    if (!best.length) {
+      let bestR = 0.72, bestA = null;
+      for (const a of apps) { const r = L.ratio(norm(a.n), t); if (r >= bestR) { bestR = r; bestA = a; } }
+      if (bestA) best = [bestA];
+    }
     if (!best.length) return false;
     best.sort((a, b) => a.n.length - b.n.length);
     await BG.launch({ package: best[0].p });
@@ -1191,7 +1213,7 @@
   }
 
   function init() {
-    $("#ver").textContent = "v4 · " + (NATIVE ? (BG ? "приложение, фон" : "приложение") : "браузер");
+    $("#ver").textContent = "v5 · " + (NATIVE ? (BG ? "приложение, фон" : "приложение") : "браузер");
     $("#ver").style.color = "var(--muted)";
     applyTheme(S.theme);
     orb.init($("#orb"));

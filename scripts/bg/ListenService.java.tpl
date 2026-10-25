@@ -39,6 +39,7 @@ public class ListenService extends Service {
     private boolean paused = false;
     private boolean alive = false;
     private boolean listening = false;
+    private String lastPartial = "";
 
     private final Runnable startTask = new Runnable() {
         @Override
@@ -135,7 +136,12 @@ public class ListenService extends Service {
                     @Override public void onRmsChanged(float rmsdB) { }
                     @Override public void onBufferReceived(byte[] buffer) { }
                     @Override public void onEndOfSpeech() { }
-                    @Override public void onPartialResults(Bundle partialResults) { }
+                    @Override
+                    public void onPartialResults(Bundle partialResults) {
+                        ArrayList<String> pm = partialResults == null ? null
+                                : partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                        if (pm != null && !pm.isEmpty() && pm.get(0) != null) lastPartial = pm.get(0);
+                    }
                     @Override public void onEvent(int eventType, Bundle params) { }
 
                     @Override
@@ -143,9 +149,13 @@ public class ListenService extends Service {
                         listening = false;
                         ArrayList<String> m = results == null ? null
                                 : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                        if (m != null && !m.isEmpty()) {
+                        String text = (m != null && !m.isEmpty() && m.get(0) != null) ? m.get(0) : "";
+                        // иногда итог короче промежуточного результата: берём более полный
+                        if (lastPartial.length() > text.length() && lastPartial.startsWith(text)) text = lastPartial;
+                        lastPartial = "";
+                        if (!text.isEmpty()) {
                             Callback c = callback;
-                            if (c != null) c.onText(m.get(0));
+                            if (c != null) c.onText(text);
                         }
                         schedule(250);
                     }
@@ -153,7 +163,15 @@ public class ListenService extends Service {
                     @Override
                     public void onError(int error) {
                         listening = false;
-                        if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                        if (!lastPartial.isEmpty()
+                                && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
+                            String t = lastPartial;
+                            lastPartial = "";
+                            Callback c = callback;
+                            if (c != null) c.onText(t);
+                            schedule(250);
+                        } else if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                            lastPartial = "";
                             schedule(300);
                         } else if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
                             Callback c = callback;
@@ -167,10 +185,15 @@ public class ListenService extends Service {
                 });
             }
             Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH);
+            i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+            i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2200);
+            i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800);
+            i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 2500);
             i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ru-RU");
             i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
             i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
+            lastPartial = "";
             listening = true;
             sr.startListening(i);
         } catch (Exception e) {
